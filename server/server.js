@@ -31,6 +31,10 @@ app.get("/health", (req, res) => {
   });
 });
 
+app.get("/", (req, res) => {
+  res.send("ReferZen API Server is Running...");
+});
+
 app.use((req, res, next) => {
   const start = Date.now();
   res.on('finish', () => {
