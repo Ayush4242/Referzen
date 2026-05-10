@@ -16,10 +16,27 @@ app.use("/uploads", express.static(uploadDir));
 
 // Middleware
 app.use(express.json());
-app.use(cors());
+app.use(cors({
+  origin: "*", // In production, replace with your specific Vercel URL for security
+  methods: ["GET", "POST", "PUT", "DELETE"],
+  credentials: true
+}));
+
+// DevOps Health Check (Crucial for Render/Monitoring)
+app.get("/health", (req, res) => {
+  res.status(200).json({ 
+    status: "healthy", 
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime() 
+  });
+});
 
 app.use((req, res, next) => {
-  console.log(`${req.method} ${req.url}`);
+  const start = Date.now();
+  res.on('finish', () => {
+    const duration = Date.now() - start;
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url} ${res.statusCode} - ${duration}ms`);
+  });
   next();
 });
 
