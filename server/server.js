@@ -9,6 +9,15 @@ dotenv.config();
 
 const app = express();
 
+// FORCE PRODUCTION ROUTES (Top Priority)
+app.get("/", (req, res) => {
+  res.send("REFERZEN API PRODUCTION SERVER IS LIVE 🚀");
+});
+
+app.get("/health", (req, res) => {
+  res.status(200).json({ status: "healthy", version: "1.0.1", uptime: process.uptime() });
+});
+
 // Upload folder
 const uploadDir = path.join(__dirname, "uploads");
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
