@@ -1,30 +1,29 @@
 const mongoose = require("mongoose");
 
-const userSchema = new mongoose.Schema({
+const userSchema = new mongoose.Schema(
+  {
     name: String,
     email: { type: String, unique: true },
     password: String,
     role: {
-        type: String,
-        enum: ["student", "referrer", "admin"],
-        default: "student"
+      type: String,
+      enum: ["student", "referrer", "admin"],
+      default: "student",
     },
     skills: [String],
     company: String,
-
-designation: String,
-
-yearsOfExperience: Number,
-
-bio: String,
-
-linkedin: String,
-
-github: String,
-
-availability: {
+    designation: String,
+    yearsOfExperience: Number,
+    bio: String,
+    linkedin: String,
+    github: String,
+    availability: {
       type: Boolean,
       default: true,
+    },
+    maxCapacity: {
+      type: Number,
+      default: 10,
     },
     resume: String,
     points: {
@@ -33,5 +32,8 @@ availability: {
     },
     activeSlots: [String],
     profileScore: { type: Number, default: 0 },
-  }, { timestamps: true });
+  },
+  { timestamps: true }
+);
+
 module.exports = mongoose.model("User", userSchema);

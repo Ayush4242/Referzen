@@ -31,19 +31,6 @@ app.use(cors({
   credentials: true
 }));
 
-// DevOps Health Check (Crucial for Render/Monitoring)
-app.get("/health", (req, res) => {
-  res.status(200).json({ 
-    status: "healthy", 
-    timestamp: new Date().toISOString(),
-    uptime: process.uptime() 
-  });
-});
-
-app.get("/", (req, res) => {
-  res.send("ReferZen API Server is Running...");
-});
-
 app.use((req, res, next) => {
   const start = Date.now();
   res.on('finish', () => {
@@ -56,8 +43,10 @@ app.use((req, res, next) => {
 // Routes
 app.use("/api/auth", require("./routes/authRoutes"));
 app.use("/api/referrals", require("./routes/referralRoutes"));
+app.use("/api/opportunities", require("./routes/opportunityRoutes"));
 app.use("/api/ai", require("./routes/aiRoutes"));
 app.use("/api/messages", require("./routes/messageRoutes"));
+
 const PORT = process.env.PORT || 5000;
 
 // DB Connection

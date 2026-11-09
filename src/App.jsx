@@ -27,7 +27,8 @@ function App() {
           <Route path="/dashboard" element={<ProtectedRoute requiredRole="student"><Dashboard /></ProtectedRoute>} />
           <Route path="/referrer-dashboard" element={<ProtectedRoute requiredRole="referrer"><ReferrerDashboard /></ProtectedRoute>} />
           <Route path="/create-referral" element={<ProtectedRoute requiredRole="student"><CreateReferral /></ProtectedRoute>} />
-          <Route path="/referrers" element={<ProtectedRoute requiredRole="student"><Referrers /></ProtectedRoute>} />
+          <Route path="/referrers" element={<ProtectedRoute><Referrers /></ProtectedRoute>} />
+          <Route path="/opportunities" element={<ProtectedRoute><Referrers /></ProtectedRoute>} />
           <Route path="/my-referrals" element={<ProtectedRoute><MyReferrals /></ProtectedRoute>} />
           <Route path="/analytics" element={<ProtectedRoute><Analytics /></ProtectedRoute>} />
           <Route path="/messages" element={<ProtectedRoute><Messages /></ProtectedRoute>} />

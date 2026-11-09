@@ -36,11 +36,15 @@ export default function Dashboard() {
   // Status styles mapping
   const statusStyles = {
     Pending: 'bg-amber-50 text-amber-700 border-amber-200',
+    "Under Review": 'bg-blue-50 text-blue-700 border-blue-200',
+    Shortlisted: 'bg-indigo-50 text-indigo-700 border-indigo-200',
     Accepted: 'bg-emerald-50 text-emerald-700 border-emerald-200',
     Interview: 'bg-blue-50 text-blue-700 border-blue-200',
     Selected: 'bg-emerald-50 text-emerald-700 border-emerald-200',
     Rejected: 'bg-red-50 text-red-700 border-red-200',
     pending: 'bg-amber-50 text-amber-700 border-amber-200',
+    "under review": 'bg-blue-50 text-blue-700 border-blue-200',
+    shortlisted: 'bg-indigo-50 text-indigo-700 border-indigo-200',
     accepted: 'bg-emerald-50 text-emerald-700 border-emerald-200',
     interview: 'bg-blue-50 text-blue-700 border-blue-200',
     selected: 'bg-emerald-50 text-emerald-700 border-emerald-200',
@@ -144,6 +148,10 @@ export default function Dashboard() {
     switch(status?.toLowerCase()) {
       case 'pending':
         return 'Waiting for referrer response';
+      case 'under review':
+        return 'Referrer is reviewing your profile & evidence';
+      case 'shortlisted':
+        return 'You are shortlisted by the referrer! ⭐';
       case 'accepted':
         return 'Referrer accepted! They will help you';
       case 'interview':

@@ -52,6 +52,7 @@ export default function Settings() {
     github: "",
     activeSlots: "",
     availability: true,
+    maxCapacity: "10",
   });
   const [resumeFile, setResumeFile] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -73,6 +74,7 @@ export default function Settings() {
       github: user.github || "",
       activeSlots: Array.isArray(user.activeSlots) ? user.activeSlots.join(", ") : user.activeSlots || "",
       availability: user.availability !== undefined ? user.availability : true,
+      maxCapacity: user.maxCapacity?.toString() || "10",
     });
   }, [user]);
 
@@ -235,7 +237,7 @@ export default function Settings() {
 
               {!isStudent && (
                  <>
-                   <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                   <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
                       <InputField 
                         label="Company" 
                         value={form.company}
@@ -253,6 +255,15 @@ export default function Settings() {
                         value={form.yearsOfExperience}
                         onChange={(e) => setForm({ ...form, yearsOfExperience: e.target.value })}
                         placeholder="e.g. 5"
+                      />
+                      <InputField 
+                        label="Max Request Capacity" 
+                        type="number"
+                        min="1"
+                        max="50"
+                        value={form.maxCapacity}
+                        onChange={(e) => setForm({ ...form, maxCapacity: e.target.value })}
+                        placeholder="e.g. 10"
                       />
                    </div>
 

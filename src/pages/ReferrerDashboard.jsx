@@ -1,834 +1,1441 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import API from "../services/api.js";
 
 export default function ReferrerDashboard() {
   const navigate = useNavigate();
   const currentUser = JSON.parse(localStorage.getItem("user")) || {};
-  const [referrals, setReferrals] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [updatingId, setUpdatingId] = useState(null);
-  const [selectedStudent, setSelectedStudent] = useState(null);
-  const [showProfileModal, setShowProfileModal] = useState(false);
-  const [referrerPoints, setReferrerPoints] = useState(currentUser.points || 0);
-  const [stats, setStats] = useState([
-    {
-      title: 'Requests Received',
-      value: '0',
-      change: '+0%',
-      trend: 'up',
-    },
-    {
-      title: 'Accepted',
-      value: '0',
-      change: '+0%',
-      trend: 'up',
-    },
-    {
-      title: 'Referral Points',
-      value: (currentUser.points || 0).toString(),
-      change: '+0pts',
-      trend: 'up',
-    },
-    {
-      title: 'Success Rate',
-      value: '0%',
-      change: 'Good',
-      trend: 'neutral',
-    },
-    {
-      title: 'Projected Bonus',
-      value: '$0',
-      change: 'Internal',
-      trend: 'up',
-    },
-  ]);
 
-  // Status styles mapping
-  const statusStyles = {
-    Pending: 'bg-amber-50 text-amber-700 border-amber-200',
-    Interview: 'bg-blue-50 text-blue-700 border-blue-200',
-    Selected: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-    Rejected: 'bg-red-50 text-red-700 border-red-200',
-    Accepted: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-    pending: 'bg-amber-50 text-amber-700 border-amber-200',
-    interview: 'bg-blue-50 text-blue-700 border-blue-200',
-    selected: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-    rejected: 'bg-red-50 text-red-700 border-red-200',
-    accepted: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+  // Primary State
+  const [activeTab, setActiveTab] = useState("evaluation"); // 'evaluation' | 'opportunities'
+  const [referrals, setReferrals] = useState([]);
+  const [opportunities, setOpportunities] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [referrerPoints, setReferrerPoints] = useState(currentUser.points || 0);
+  const [availability, setAvailability] = useState(currentUser.availability !== false);
+
+  // Filters for Candidate Evaluation
+  const [selectedOpportunityFilter, setSelectedOpportunityFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [sortBy, setSortBy] = useState("score"); // 'score' | 'date' | 'exp'
+  const [candidateSearch, setCandidateSearch] = useState("");
+
+  // Modals & Drawers
+  const [selectedApplication, setSelectedApplication] = useState(null);
+  const [showEvaluationModal, setShowEvaluationModal] = useState(false);
+  const [evaluatingId, setEvaluatingId] = useState(null);
+  const [updatingStatusId, setUpdatingStatusId] = useState(null);
+
+  // Side-by-side comparison
+  const [comparisonIds, setComparisonIds] = useState([]);
+  const [showComparisonModal, setShowComparisonModal] = useState(false);
+
+  // Create Opportunity Modal
+  const [showCreateOppModal, setShowCreateOppModal] = useState(false);
+  const [oppForm, setOppForm] = useState({
+    title: "",
+    company: currentUser.company || "",
+    role: "Software Engineering",
+    description: "",
+    requiredSkills: "",
+    minExperience: "0",
+    maxExperience: "5",
+    educationRequirements: "Bachelor's in CS, Engineering or practical equivalent",
+    maxApplications: "10",
+    mandatoryRequirements: "",
+    weights: {
+      skillAlignment: 35,
+      practicalExperience: 25,
+      workExperience: 20,
+      education: 10,
+      certifications: 10,
+    },
+  });
+  const [creatingOpp, setCreatingOpp] = useState(false);
+  const [createOppError, setCreateOppError] = useState("");
+
+  // Status mapping
+  const statusBadgeStyles = {
+    Pending: "bg-amber-50 text-amber-700 border-amber-200",
+    "Under Review": "bg-blue-50 text-blue-700 border-blue-200",
+    Shortlisted: "bg-indigo-50 text-indigo-700 border-indigo-200",
+    Accepted: "bg-emerald-50 text-emerald-700 border-emerald-200",
+    Interview: "bg-blue-50 text-blue-700 border-blue-200",
+    Selected: "bg-emerald-50 text-emerald-700 border-emerald-200",
+    Rejected: "bg-rose-50 text-rose-700 border-rose-200",
   };
 
-  // Inline style for animation
-  const marqueeStyle = `
-    @keyframes slideMarquee {
-      0% { transform: translateX(0%); }
-      100% { transform: translateX(-50%); }
-    }
-  `;
-
-  // Fetch referrals on component mount
   useEffect(() => {
     if (!currentUser?._id) {
-      navigate("/");
+      navigate("/login");
       return;
     }
-
     if (currentUser.role !== "referrer") {
       navigate("/my-referrals");
       return;
     }
-
-    fetchReferrals();
+    fetchDashboardData();
   }, []);
 
-  const fetchReferrals = async () => {
+  const fetchDashboardData = async () => {
+    setLoading(true);
     try {
-      const user = JSON.parse(localStorage.getItem("user"));
-      
-      if (!user || !user._id) {
-        console.log("No user found");
-        setLoading(false);
-        return;
-      }
+      // 1. Fetch applications for this referrer
+      const resRefs = await API.get(`/referrals/referrer/${currentUser._id}`);
+      setReferrals(resRefs.data || []);
 
-      const res = await API.get(`/referrals/referrer/${user._id}`);
-      setReferrals(res.data);
-      
-      // Update stats based on fetched data
-      updateStats(res.data);
+      // 2. Fetch opportunities created by this referrer
+      const resOpps = await API.get("/opportunities/mine");
+      setOpportunities(resOpps.data || []);
     } catch (err) {
-      console.log("Error fetching referrals:", err);
+      console.error("Dashboard fetch error:", err);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleUpdateStatus = async (referralId, status) => {
-    setUpdatingId(referralId);
-
+  // Toggle Referrer Availability
+  const handleToggleAvailability = async () => {
+    const nextVal = !availability;
+    setAvailability(nextVal);
     try {
-      const res = await API.put(`/referrals/${referralId}/status`, { status });
-      let updatedPoints = referrerPoints;
-
-      if (res.data.referrer && res.data.referrer._id === currentUser._id) {
-        updatedPoints = res.data.referrer.points || referrerPoints;
-        setReferrerPoints(updatedPoints);
-        localStorage.setItem(
-          "user",
-          JSON.stringify({ ...currentUser, points: updatedPoints })
-        );
-      }
-
-      setReferrals((current) => {
-        const newData = current.map((referral) =>
-          referral._id === referralId ? res.data : referral
-        );
-        updateStats(newData, updatedPoints);
-        return newData;
-      });
+      await API.put("/auth/profile", { availability: nextVal });
+      const updatedUser = { ...currentUser, availability: nextVal };
+      localStorage.setItem("user", JSON.stringify(updatedUser));
     } catch (err) {
-      console.log("Error updating referral status:", err);
-      alert(err.response?.data?.message || err.response?.data || err.message || "Could not update referral status. Please try again.");
-    } finally {
-      setUpdatingId(null);
+      console.error("Failed to update availability:", err);
+      setAvailability(!nextVal);
     }
   };
 
-  const handleViewProfile = (student) => {
-    setSelectedStudent(student);
-    setShowProfileModal(true);
+  // Update Application Status (Phase 6)
+  const handleUpdateStatus = async (applicationId, newStatus) => {
+    setUpdatingStatusId(applicationId);
+    try {
+      const res = await API.put(`/referrals/${applicationId}/status`, { status: newStatus });
+      const updatedRef = res.data;
+
+      // Update state
+      setReferrals((prev) =>
+        prev.map((r) => (r._id === applicationId ? updatedRef : r))
+      );
+
+      if (selectedApplication?._id === applicationId) {
+        setSelectedApplication(updatedRef);
+      }
+
+      if (updatedRef.referrer?.points) {
+        setReferrerPoints(updatedRef.referrer.points);
+        const updatedUser = { ...currentUser, points: updatedRef.referrer.points };
+        localStorage.setItem("user", JSON.stringify(updatedUser));
+      }
+    } catch (err) {
+      console.error("Error updating status:", err);
+      alert(err.response?.data?.message || "Failed to update status.");
+    } finally {
+      setUpdatingStatusId(null);
+    }
   };
 
-  const closeProfileModal = () => {
-    setShowProfileModal(false);
-    setSelectedStudent(null);
+  // Trigger / Re-run AI Evaluation
+  const handleTriggerEvaluation = async (applicationId) => {
+    setEvaluatingId(applicationId);
+    try {
+      const res = await API.post(`/referrals/${applicationId}/evaluate`);
+      const updatedRef = res.data;
+      setReferrals((prev) =>
+        prev.map((r) => (r._id === applicationId ? updatedRef : r))
+      );
+      if (selectedApplication?._id === applicationId) {
+        setSelectedApplication(updatedRef);
+      }
+    } catch (err) {
+      console.error("Evaluation error:", err);
+      alert(err.response?.data?.message || "AI Evaluation failed. Please try again.");
+    } finally {
+      setEvaluatingId(null);
+    }
   };
 
-  const getResumeUrl = (path) => {
-    if (!path) return "";
-    if (path.startsWith("http")) return path;
-    const baseUrl = API.defaults.baseURL.replace("/api", "");
-    return `${baseUrl}${path}`;
+  // Create Opportunity
+  const handleCreateOpportunity = async (e) => {
+    e.preventDefault();
+    setCreatingOpp(true);
+    setCreateOppError("");
+
+    try {
+      const res = await API.post("/opportunities/create", {
+        ...oppForm,
+        minExperience: Number(oppForm.minExperience) || 0,
+        maxExperience: Number(oppForm.maxExperience) || 5,
+        maxApplications: Number(oppForm.maxApplications) || 10,
+      });
+
+      setOpportunities([res.data, ...opportunities]);
+      setShowCreateOppModal(false);
+      setOppForm({
+        title: "",
+        company: currentUser.company || "",
+        role: "Software Engineering",
+        description: "",
+        requiredSkills: "",
+        minExperience: "0",
+        maxExperience: "5",
+        educationRequirements: "Bachelor's in CS, Engineering or practical equivalent",
+        maxApplications: "10",
+        mandatoryRequirements: "",
+        weights: {
+          skillAlignment: 35,
+          practicalExperience: 25,
+          workExperience: 20,
+          education: 10,
+          certifications: 10,
+        },
+      });
+    } catch (err) {
+      console.error("Error creating opportunity:", err);
+      setCreateOppError(err.response?.data?.message || "Failed to create opportunity.");
+    } finally {
+      setCreatingOpp(false);
+    }
   };
 
-  // Calculate dynamic stats from referrals data
-  const updateStats = (referralsData, points = referrerPoints) => {
-    const total = referralsData.length;
-    const accepted = referralsData.filter(r => r.status?.toLowerCase() === 'accepted').length;
-    const rejected = referralsData.filter(r => r.status?.toLowerCase() === 'rejected').length;
-    
-    const successRate = total > 0 ? Math.round((accepted / total) * 100) : 0;
-    
-    setStats([
-      {
-        title: 'Requests Received',
-        value: total.toString(),
-        change: total > 0 ? `+${Math.round((total / 10) * 100)}%` : '+0%',
-        trend: 'up',
-      },
-      {
-        title: 'Accepted',
-        value: accepted.toString(),
-        change: accepted > 0 ? `+${Math.round((accepted / 5) * 100)}%` : '+0%',
-        trend: 'up',
-      },
-      {
-        title: 'Referral Points',
-        value: points.toString(),
-        change: points > 0 ? `+${points}pts` : '+0pts',
-        trend: 'up',
-      },
-      {
-        title: 'Success Rate',
-        value: `${successRate}%`,
-        change: successRate >= 70 ? 'Excellent' : successRate >= 50 ? 'Good' : 'Needs Improvement',
-        trend: 'neutral',
-      },
-      {
-        title: 'Projected Bonus',
-        value: `$${(accepted * 1500).toLocaleString()}`,
-        change: 'Est. Internal',
-        trend: 'up',
-      },
-    ]);
+  // Toggle Opportunity Status (Active, Paused, Closed)
+  const handleToggleOpportunityStatus = async (oppId, newStatus) => {
+    try {
+      const res = await API.put(`/opportunities/${oppId}/status`, { status: newStatus });
+      setOpportunities((prev) =>
+        prev.map((o) => (o._id === oppId ? { ...o, status: res.data.status } : o))
+      );
+    } catch (err) {
+      console.error("Error updating opportunity status:", err);
+      alert("Failed to update opportunity status.");
+    }
   };
+
+  // Filtered & Sorted Candidates
+  const filteredCandidates = useMemo(() => {
+    return referrals
+      .filter((ref) => {
+        // Opportunity filter
+        if (selectedOpportunityFilter === "direct") {
+          if (ref.opportunity) return false;
+        } else if (selectedOpportunityFilter !== "all") {
+          if (ref.opportunity?._id !== selectedOpportunityFilter && ref.opportunity !== selectedOpportunityFilter) {
+            return false;
+          }
+        }
+
+        // Status filter
+        if (statusFilter !== "all" && ref.status?.toLowerCase() !== statusFilter.toLowerCase()) {
+          return false;
+        }
+
+        // Search term (student name, skills, jobRole)
+        if (candidateSearch) {
+          const q = candidateSearch.toLowerCase();
+          const name = ref.student?.name?.toLowerCase() || "";
+          const role = ref.jobRole?.toLowerCase() || "";
+          const skills = (ref.student?.skills || []).map((s) => s.toLowerCase());
+          const hasSkill = skills.some((s) => s.includes(q));
+          if (!name.includes(q) && !role.includes(q) && !hasSkill) return false;
+        }
+
+        return true;
+      })
+      .sort((a, b) => {
+        if (sortBy === "score") {
+          const scoreA = a.evaluation?.overallScore || a.matchScore || 0;
+          const scoreB = b.evaluation?.overallScore || b.matchScore || 0;
+          return scoreB - scoreA;
+        }
+        if (sortBy === "exp") {
+          const expA = a.student?.yearsOfExperience || 0;
+          const expB = b.student?.yearsOfExperience || 0;
+          return expB - expA;
+        }
+        return new Date(b.createdAt) - new Date(a.createdAt);
+      });
+  }, [referrals, selectedOpportunityFilter, statusFilter, sortBy, candidateSearch]);
+
+  // Comparison Handlers
+  const toggleComparison = (id) => {
+    if (comparisonIds.includes(id)) {
+      setComparisonIds(comparisonIds.filter((cid) => cid !== id));
+    } else {
+      if (comparisonIds.length >= 3) {
+        alert("You can compare up to 3 candidates at a time.");
+        return;
+      }
+      setComparisonIds([...comparisonIds, id]);
+    }
+  };
+
+  const candidatesForComparison = useMemo(() => {
+    return referrals.filter((r) => comparisonIds.includes(r._id));
+  }, [referrals, comparisonIds]);
+
+  // Overall Stats
+  const statsData = useMemo(() => {
+    const total = referrals.length;
+    const shortlisted = referrals.filter((r) => r.status === "Shortlisted").length;
+    const accepted = referrals.filter((r) => ["Accepted", "Selected"].includes(r.status)).length;
+    const underReview = referrals.filter((r) => r.status === "Under Review").length;
+    const activeOpps = opportunities.filter((o) => o.status === "Active").length;
+
+    return [
+      { title: "Total Applications", value: total.toString(), icon: "📥", badge: `${underReview} in review` },
+      { title: "Shortlisted Candidates", value: shortlisted.toString(), icon: "⭐", badge: "High priority" },
+      { title: "Referrals Accepted", value: accepted.toString(), icon: "🏆", badge: `${accepted * 5} pts earned` },
+      { title: "Active Opportunities", value: activeOpps.toString(), icon: "💼", badge: `${opportunities.length} total posted` },
+    ];
+  }, [referrals, opportunities]);
 
   return (
-    <div className="min-h-screen bg-white text-gray-900 flex font-['Inter',_system-ui,_-apple-system,_BlinkMacSystemFont,_'Segoe_UI',_Roboto,_sans-serif] antialiased">
-      {/* Add style tag for keyframes */}
-      <style>{marqueeStyle}</style>
-      
-      {/* SIDEBAR — refined, minimal, structural */}
-      <aside className="w-[280px] bg-white border-r border-gray-100 flex flex-col justify-between sticky top-0 h-screen">
-        <div>
-          {/* Brand — restrained */}
-          <div className="px-6 pt-8 pb-10 border-b border-gray-50">
-            <div className="flex items-baseline gap-0.5">
-              <span className="text-xl font-semibold tracking-tight text-gray-900">Refer</span>
-              <span className="text-xl font-light text-gray-300 tracking-tight">Zen</span>
-            </div>
-            <div className="flex gap-4 mt-2">
-              <span className="text-[11px] font-medium text-gray-400 uppercase tracking-wide">Press-on</span>
-              <span className="text-[11px] font-medium text-gray-400 uppercase tracking-wide">Accessories</span>
-              <span className="text-[11px] font-medium text-gray-400 uppercase tracking-wide">Help</span>
-            </div>
+    <div className="min-h-screen bg-gray-50/50 font-['Inter',_sans-serif] selection:bg-blue-100 selection:text-blue-900 pb-20">
+      {/* Top Navbar */}
+      <div className="bg-white/80 backdrop-blur-xl border-b border-gray-100 sticky top-0 z-30 shadow-sm">
+        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+          <div className="flex items-baseline gap-1 cursor-pointer" onClick={() => navigate("/referrer-dashboard")}>
+            <span className="text-2xl font-bold tracking-tighter text-gray-900">Refer</span>
+            <span className="text-2xl font-light text-blue-600 tracking-tighter">Zen</span>
           </div>
 
-          {/* Navigation */}
-          <nav className="px-4 py-6 space-y-1">
-            {[
-              'Dashboard',
-              'My Referrals',
-              'Leaderboard',
-              'Analytics',
-              'Messages',
-              'AI Assistant',
-              'Settings',
-            ].map((item) => {
-              const paths = {
-                Dashboard: '/referrer-dashboard',
-                'My Referrals': '/my-referrals',
-                Leaderboard: '/leaderboard',
-                Analytics: '/analytics',
-                Messages: '/messages',
-                'AI Assistant': '/ai-assistant',
-                Settings: '/settings',
-              };
+          <div className="flex items-center gap-6">
+            <nav className="hidden md:flex items-center gap-6">
+              <button
+                onClick={() => navigate("/referrer-dashboard")}
+                className="text-xs font-semibold text-blue-600 uppercase tracking-widest transition"
+              >
+                Dashboard
+              </button>
+              <button
+                onClick={() => navigate("/my-referrals")}
+                className="text-xs font-semibold text-gray-500 uppercase tracking-widest hover:text-blue-600 transition"
+              >
+                Applications Log
+              </button>
+              <button
+                onClick={() => navigate("/leaderboard")}
+                className="text-xs font-semibold text-gray-500 uppercase tracking-widest hover:text-amber-600 transition flex items-center gap-1.5"
+              >
+                <span>🏆</span> Wall of Fame
+              </button>
+              <button
+                onClick={() => navigate("/ai-assistant")}
+                className="text-xs font-semibold text-gray-500 uppercase tracking-widest hover:text-blue-600 transition"
+              >
+                AI Concierge
+              </button>
+            </nav>
 
-              return (
-                <button
-                  key={item}
-                  type="button"
-                  onClick={() => navigate(paths[item])}
-                  className="w-full text-left px-3 py-2.5 rounded-lg text-sm font-medium text-gray-500 hover:text-gray-900 hover:bg-gray-50 transition-all duration-200"
-                >
-                  {item}
-                </button>
-              );
-            })}
-          </nav>
-        </div>
-
-      </aside>
-
-      {/* MAIN CONTENT */}
-      <main className="flex-1 overflow-y-auto bg-gray-50/30">
-        {/* Top bar — clean, border only */}
-        <div className="sticky top-0 z-10 bg-white/80 backdrop-blur-sm border-b border-gray-100 px-8 py-4 flex items-center justify-between">
-          {/* left: breadcrumb / welcome minimal */}
-          <div>
-            <h1 className="text-sm font-medium text-gray-900">Referrer Dashboard</h1>
-            <p className="text-xs text-gray-400 mt-0.5">Manage your referral requests</p>
-          </div>
-
-          {/* right: search + avatar */}
-          <div className="flex items-center gap-4">
-            <div className="relative">
-              <input
-                type="text"
-                placeholder="Search requests..."
-                className="w-64 bg-gray-50 border border-gray-100 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-gray-300 focus:bg-white transition-colors"
+            {/* Availability Toggle */}
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-gray-100 border border-gray-200">
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  availability ? "bg-emerald-500 animate-pulse" : "bg-rose-500"
+                }`}
               />
-              <svg className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-              </svg>
+              <span className="text-[11px] font-bold text-gray-700">
+                {availability ? "Accepting" : "Paused"}
+              </span>
+              <button
+                onClick={handleToggleAvailability}
+                className="text-[10px] uppercase font-bold text-blue-600 hover:underline pl-1 cursor-pointer"
+              >
+                {availability ? "Pause" : "Resume"}
+              </button>
             </div>
-            <div className="w-8 h-8 rounded-full bg-gray-900 flex items-center justify-center text-white text-sm font-semibold">
-              {currentUser.name?.[0]?.toUpperCase() || 'R'}
+
+            <div
+              onClick={() => navigate("/settings")}
+              className="w-9 h-9 rounded-full bg-gray-900 text-white flex items-center justify-center text-xs font-bold shadow-md cursor-pointer hover:scale-105 transition"
+            >
+              {currentUser.name?.[0]?.toUpperCase() || "R"}
             </div>
           </div>
         </div>
+      </div>
 
-        <div className="px-8 py-8">
-          {/* Stats row — clean cards with no excess */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-12">
-            {stats.map((stat) => (
-              <div key={stat.title} className="group bg-white border border-gray-100 rounded-3xl p-6 shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all duration-300">
-                <div className="flex justify-between items-start mb-4">
-                   <p className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em]">{stat.title}</p>
-                   <div className="p-2 bg-gray-50 rounded-xl group-hover:bg-blue-50 transition-colors">
-                      <svg className="w-4 h-4 text-gray-400 group-hover:text-blue-600 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" /></svg>
-                   </div>
-                </div>
-                <div className="flex items-baseline gap-2">
-                   <p className="text-3xl font-black text-[#0f172a] tracking-tighter">{stat.value}</p>
-                   <p className="text-xs font-bold text-emerald-500">{stat.change}</p>
-                </div>
+      <div className="max-w-7xl mx-auto px-6 pt-10">
+        {/* Header Hero Banner */}
+        <div className="mb-8 rounded-3xl bg-[#0f172a] text-white p-8 md:p-10 shadow-xl shadow-blue-900/10 relative overflow-hidden">
+          <div className="absolute top-0 right-0 w-[450px] h-[450px] bg-blue-600 rounded-full mix-blend-multiply filter blur-[120px] opacity-25"></div>
+
+          <div className="relative z-10 flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
+            <div>
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/10 border border-white/15 mb-3 backdrop-blur-md">
+                <span className="text-[10px] font-bold tracking-widest uppercase text-blue-200">
+                  Referrer Command Center · {currentUser.company || "Company"}
+                </span>
               </div>
-            ))}
+              <h1 className="text-3xl md:text-4xl font-black tracking-tight mb-2">
+                Candidate Evaluation & <span className="text-blue-400">Opportunity Management</span>
+              </h1>
+              <p className="text-xs md:text-sm text-blue-100/70 max-w-xl">
+                AI-assisted candidate evidence evaluation, objective requirement matching, and full decision authority over student applications.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                onClick={() => setShowCreateOppModal(true)}
+                className="px-5 py-3 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold uppercase tracking-wider transition shadow-lg shadow-blue-600/30 flex items-center gap-2 cursor-pointer"
+              >
+                <span>➕</span> Post Referral Opportunity
+              </button>
+
+              <div className="px-4 py-2.5 rounded-2xl bg-white/10 backdrop-blur-md border border-white/15 text-center">
+                <p className="text-xl font-black text-amber-400 leading-tight">{referrerPoints}</p>
+                <p className="text-[9px] font-bold uppercase tracking-widest text-blue-200">Referral Points</p>
+              </div>
+            </div>
           </div>
 
-          {/* MOVING EDITORIAL STRIP — animated version */}
-          <div className="border-y border-gray-100 py-4 mb-10 bg-white relative overflow-hidden">
-            <div 
-              className="flex items-center"
-              style={{
-                width: 'max-content',
-                animation: 'slideMarquee 28s linear infinite',
-              }}
-              onMouseEnter={(e) => e.currentTarget.style.animationPlayState = 'paused'}
-              onMouseLeave={(e) => e.currentTarget.style.animationPlayState = 'running'}
+          {/* Navigation Sub-Tabs */}
+          <div className="relative z-10 flex items-center gap-3 mt-8 pt-6 border-t border-white/10">
+            <button
+              onClick={() => setActiveTab("evaluation")}
+              className={`px-5 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer ${
+                activeTab === "evaluation"
+                  ? "bg-white text-gray-900 shadow-md scale-105"
+                  : "bg-white/10 text-white hover:bg-white/20"
+              }`}
             >
-              {/* First set */}
-              <div className="flex items-center gap-8 pr-8">
-                <span className="text-[11px] font-medium text-gray-400 uppercase tracking-wider">Top Talent</span>
-                <span className="text-gray-300">/</span>
-                <span className="text-[11px] font-medium text-gray-400 uppercase tracking-wider">Verified Profiles</span>
-                <span className="text-gray-300">/</span>
-                <span className="text-[11px] font-medium text-gray-400 uppercase tracking-wider">Engineering</span>
-                <span className="text-gray-300">/</span>
-                <span className="text-[11px] font-medium text-gray-400 uppercase tracking-wider">Design</span>
-                <span className="text-gray-300">/</span>
-                <span className="text-[11px] font-medium text-gray-400 uppercase tracking-wider">Product</span>
-                <span className="text-gray-300">/</span>
-                <span className="text-[11px] font-medium text-gray-400 uppercase tracking-wider">Mentorship</span>
-                <span className="text-gray-300">/</span>
-                <span className="text-[11px] font-medium text-gray-400 uppercase tracking-wider">Impact</span>
-                <span className="text-gray-300">/</span>
-                <span className="text-[11px] font-medium text-emerald-600 font-bold uppercase tracking-wider bg-emerald-50 px-3 py-1 rounded-full">
-                  HIGH VELOCITY
-                </span>
-              </div>
-              
-              {/* Duplicate for seamless loop */}
-              <div className="flex items-center gap-8 pr-8">
-                <span className="text-[11px] font-medium text-gray-400 uppercase tracking-wider">Spring</span>
-                <span className="text-gray-300">/</span>
-                <span className="text-[11px] font-medium text-gray-400 uppercase tracking-wider">New Collection</span>
-                <span className="text-gray-300">/</span>
-                <span className="text-[11px] font-medium text-gray-400 uppercase tracking-wider">Button Mode</span>
-                <span className="text-gray-300">/</span>
-                <span className="text-[11px] font-medium text-gray-400 uppercase tracking-wider">ELLE</span>
-                <span className="text-gray-300">/</span>
-                <span className="text-[11px] font-medium text-gray-400 uppercase tracking-wider">PLAZA</span>
-                <span className="text-gray-300">/</span>
-                <span className="text-[11px] font-medium text-gray-400 uppercase tracking-wider">FEMININE</span>
-                <span className="text-gray-300">/</span>
-                <span className="text-[11px] font-medium text-gray-400 uppercase tracking-wider">DAISY</span>
-                <span className="text-gray-300">/</span>
-                <span className="text-[11px] font-medium text-gray-400 uppercase tracking-wider">VOGUE</span>
-                <span className="text-gray-300">/</span>
-                <span className="text-[11px] font-medium text-gray-500 uppercase tracking-wider bg-gray-100 px-3 py-1 rounded-full">
-                  POPULAR
-                </span>
-              </div>
-            </div>
-          </div>
+              <span>📊</span> Candidate Evaluation Dashboard ({referrals.length})
+            </button>
+            <button
+              onClick={() => setActiveTab("opportunities")}
+              className={`px-5 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer ${
+                activeTab === "opportunities"
+                  ? "bg-white text-gray-900 shadow-md scale-105"
+                  : "bg-white/10 text-white hover:bg-white/20"
+              }`}
+            >
+              <span>💼</span> My Opportunities ({opportunities.length})
+            </button>
 
-          {/* Referral Requests Table */}
-          <div className="bg-white border border-gray-100 rounded-[2.5rem] mb-12 overflow-hidden shadow-sm">
-            <div className="px-8 py-7 border-b border-gray-50 flex items-center justify-between bg-white/50 backdrop-blur-md">
-              <div>
-                <h2 className="text-xl font-black text-[#0f172a] tracking-tight">Incoming Referral Requests</h2>
-                <p className="text-xs text-gray-400 mt-1">Review and manage your pending student applications</p>
-              </div>
-              <div className="flex gap-3">
-                <button className="text-[10px] font-black bg-[#0f172a] text-white px-6 py-3 rounded-2xl uppercase tracking-widest hover:scale-105 active:scale-95 transition-all shadow-lg shadow-blue-900/20">
-                  Bulk Actions
-                </button>
-              </div>
-            </div>
-            
-            {loading ? (
-              <div className="p-12 text-center">
-                <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
-                <p className="mt-4 text-sm text-gray-500">Loading requests...</p>
-              </div>
-            ) : referrals.length === 0 ? (
-              <div className="p-12 text-center">
-                <svg className="w-16 h-16 mx-auto text-gray-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                </svg>
-                <p className="text-sm text-gray-500 mb-4">No referral requests yet</p>
-                <p className="text-xs text-gray-400">Requests will appear here when students ask for your referral</p>
-              </div>
-            ) : (
-              <table className="w-full">
-                <thead>
-                  <tr className="border-b border-gray-50 bg-gray-50/20">
-                    <th className="text-left px-6 py-3 text-[11px] font-medium text-gray-400 uppercase tracking-wider">Student</th>
-                    <th className="text-left px-6 py-3 text-[11px] font-medium text-gray-400 uppercase tracking-wider">Company</th>
-                    <th className="text-left px-6 py-3 text-[11px] font-medium text-gray-400 uppercase tracking-wider">Role</th>
-                    <th className="text-left px-6 py-3 text-[11px] font-medium text-gray-400 uppercase tracking-wider">Message</th>
-                    <th className="text-left px-6 py-3 text-[11px] font-medium text-gray-400 uppercase tracking-wider">Status</th>
-                    <th className="text-left px-6 py-3 text-[11px] font-medium text-gray-400 uppercase tracking-wider">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {referrals.map((referral) => (
-                    <tr 
-                      key={referral._id} 
-                      className="border-b border-gray-50 hover:bg-gray-50/30 transition"
-                    >
-                      <td className="px-6 py-4">
-                        <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 rounded-full bg-gray-900 flex items-center justify-center text-white text-xs font-semibold">
-                            {referral.student?.name?.[0]?.toUpperCase() || '?'}
-                          </div>
-                          <div>
-                            <p className="text-sm font-medium text-gray-900">
-                              {referral.student?.name || 'Unknown Student'}
-                            </p>
-                            <p className="text-xs text-gray-500">
-                              {referral.student?.email || ''}
-                            </p>
-                          </div>
-                        </div>
-                       </td>
-                      <td className="px-6 py-4 text-sm font-medium text-gray-900">
-                        {referral.company}
-                       </td>
-                      <td className="px-6 py-4 text-sm text-gray-500">
-                        {referral.jobRole}
-                       </td>
-                      <td className="px-6 py-4">
-                        <p className="text-sm text-gray-600 line-clamp-2 max-w-xs">
-                          {referral.message}
-                        </p>
-                       </td>
-                      <td className="px-6 py-4">
-                        <span className={`text-[11px] font-medium px-2.5 py-1 rounded-full border ${
-                          statusStyles[referral.status] || statusStyles.Pending
-                        }`}>
-                          {referral.status || 'Pending'}
-                        </span>
-                       </td>
-                      <td className="px-6 py-4">
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => handleViewProfile(referral.student)}
-                            className="text-xs font-medium rounded-lg px-3 py-2 bg-blue-50 text-blue-700 border border-blue-100 hover:bg-blue-100 transition"
-                          >
-                            View Profile
-                          </button>
-                          <button
-                            onClick={() => handleUpdateStatus(referral._id, 'Accepted')}
-                            disabled={updatingId === referral._id || referral.status === 'Accepted'}
-                            className="text-xs font-medium rounded-lg px-3 py-2 bg-emerald-50 text-emerald-700 border border-emerald-100 hover:bg-emerald-100 disabled:opacity-50 disabled:cursor-not-allowed transition"
-                          >
-                            {updatingId === referral._id ? '...' : 'Accept'}
-                          </button>
-                          <button
-                            onClick={() => handleUpdateStatus(referral._id, 'Interview')}
-                            disabled={updatingId === referral._id || referral.status === 'Interview'}
-                            className="text-xs font-medium rounded-lg px-3 py-2 bg-blue-50 text-blue-700 border border-blue-100 hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed transition"
-                          >
-                            {updatingId === referral._id && referral.status !== 'Interview' ? '...' : 'Interview'}
-                          </button>
-                          <button
-                            onClick={() => handleUpdateStatus(referral._id, 'Selected')}
-                            disabled={updatingId === referral._id || referral.status === 'Selected'}
-                            className="text-xs font-medium rounded-lg px-3 py-2 bg-indigo-50 text-indigo-700 border border-indigo-100 hover:bg-indigo-100 disabled:opacity-50 disabled:cursor-not-allowed transition"
-                          >
-                            {updatingId === referral._id && referral.status !== 'Selected' ? '...' : 'Selected'}
-                          </button>
-                          <button
-                            onClick={() => handleUpdateStatus(referral._id, 'Rejected')}
-                            disabled={updatingId === referral._id || referral.status === 'Rejected'}
-                            className="text-xs font-medium rounded-lg px-3 py-2 bg-red-50 text-red-700 border border-red-100 hover:bg-red-100 disabled:opacity-50 disabled:cursor-not-allowed transition"
-                          >
-                            {updatingId === referral._id && referral.status !== 'Rejected' ? '...' : 'Reject'}
-                          </button>
-                        </div>
-                       </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            {comparisonIds.length > 0 && (
+              <button
+                onClick={() => setShowComparisonModal(true)}
+                className="ml-auto px-4 py-2.5 rounded-xl bg-indigo-500 hover:bg-indigo-600 text-white text-xs font-bold uppercase tracking-wider shadow-md animate-bounce cursor-pointer"
+              >
+                Compare ({comparisonIds.length}) Side-by-Side →
+              </button>
             )}
           </div>
+        </div>
 
-          {/* PROJECTED REWARDS & CORPORATE ROI HUB */}
-          <div className="bg-[#0f172a] rounded-[2.5rem] p-12 relative overflow-hidden shadow-2xl shadow-blue-900/20">
-            {/* Decorative background elements */}
-            <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-blue-600 rounded-full mix-blend-multiply filter blur-[120px] opacity-10 animate-pulse"></div>
-            <div className="absolute -bottom-24 -left-24 w-[400px] h-[400px] bg-indigo-500 rounded-full mix-blend-overlay filter blur-[100px] opacity-10"></div>
-            
-            <div className="relative z-10">
-              <div className="flex flex-col lg:flex-row items-start justify-between gap-16">
-                
-                {/* Left Side: Summary & Ticker */}
-                <div className="flex-1 max-w-xl">
-                  <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-500/10 border border-blue-500/20 mb-6">
-                    <span className="w-1.5 h-1.5 rounded-full bg-blue-400"></span>
-                    <span className="text-[10px] font-black text-blue-300 uppercase tracking-widest">Financial & Professional ROI</span>
-                  </div>
-                  <h2 className="text-white text-4xl font-black tracking-tight mb-6 leading-tight">
-                    Projected <span className="text-blue-400">Corporate Rewards</span>
-                  </h2>
-                  <p className="text-blue-100/40 text-sm leading-relaxed mb-10 max-w-md">
-                    ReferZen optimizes your time. By referring pre-vetted students with high profile scores, you maximize your internal corporate bonuses while spending 80% less time on manual vetting.
-                  </p>
-                  
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-3xl p-6">
-                       <p className="text-[10px] font-bold text-blue-300/50 uppercase tracking-widest mb-2">Est. Bonus Revenue</p>
-                       <p className="text-4xl font-black text-white tracking-tighter mb-1">
-                          ${(referrals.filter(r => r.status?.toLowerCase() === 'accepted').length * 1500).toLocaleString()}
-                       </p>
-                       <p className="text-[10px] text-blue-300/30 font-medium">Based on $1,500/hire company avg.</p>
-                    </div>
-                    <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-3xl p-6">
-                       <p className="text-[10px] font-bold text-blue-300/50 uppercase tracking-widest mb-2">Time Optimization</p>
-                       <p className="text-4xl font-black text-emerald-400 tracking-tighter mb-1">
-                          +{referrals.length * 15}m
-                       </p>
-                       <p className="text-[10px] text-blue-300/30 font-medium">Saved vs manual LinkedIn vetting</p>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Right Side: Tier & Progression */}
-                <div className="w-full lg:w-[400px] bg-white/5 backdrop-blur-xl border border-white/10 rounded-[2rem] p-8">
-                  <div className="flex items-center gap-4 mb-8">
-                    <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-3xl shadow-xl shadow-blue-500/20">
-                      {referrals.filter(r => r.status?.toLowerCase() === 'accepted').length > 5 ? '🥇' : '🥈'}
-                    </div>
-                    <div>
-                      <h3 className="text-white font-bold text-lg tracking-tight">
-                        {referrals.filter(r => r.status?.toLowerCase() === 'accepted').length > 5 ? 'Elite Talent Scout' : 'Professional Referrer'}
-                      </h3>
-                      <p className="text-blue-300/40 text-[10px] font-bold uppercase tracking-widest">Referrer Tier 02</p>
-                    </div>
-                  </div>
-
-                  <div className="space-y-8">
-                    <div>
-                      <div className="flex justify-between items-end mb-3">
-                         <p className="text-[10px] font-bold text-white uppercase tracking-widest">Network Authority</p>
-                         <p className="text-xs font-black text-blue-400">88%</p>
-                      </div>
-                      <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
-                        <div className="h-full bg-blue-500 rounded-full w-[88%] shadow-[0_0_15px_rgba(59,130,246,0.5)]"></div>
-                      </div>
-                    </div>
-
-                    <div className="p-4 rounded-2xl bg-white/5 border border-white/5">
-                      <h4 className="text-[10px] font-black text-blue-200 uppercase tracking-widest mb-2">Platform Advantage</h4>
-                      <p className="text-xs text-blue-100/40 leading-relaxed">
-                        Your candidates have an average Profile Score of 92%. This places your referrals in the **Top 5%** of the company's applicant pool.
-                      </p>
-                    </div>
-                  </div>
-
-                  <button 
-                    onClick={() => navigate('/analytics')}
-                    className="w-full mt-8 py-4 bg-white text-[#0f172a] rounded-2xl font-black text-[10px] uppercase tracking-[0.2em] hover:bg-blue-50 transition-colors shadow-xl"
-                  >
-                    View Talent ROI Report
-                  </button>
-                </div>
-
+        {/* Stats Row */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+          {statsData.map((s) => (
+            <div
+              key={s.title}
+              className="bg-white rounded-2xl p-5 border border-gray-100 shadow-sm flex flex-col justify-between"
+            >
+              <div className="flex justify-between items-start mb-2">
+                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">{s.title}</span>
+                <span className="text-xl">{s.icon}</span>
+              </div>
+              <div>
+                <p className="text-3xl font-black text-gray-900 leading-none mb-1">{s.value}</p>
+                <p className="text-[10px] font-semibold text-blue-600">{s.badge}</p>
               </div>
             </div>
-          </div>
+          ))}
         </div>
-      </main>
 
-      {/* Student Profile Modal - Beautified Version */}
-      {showProfileModal && selectedStudent && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in duration-200">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto transform transition-all">
-            {/* Modal Header with Gradient Accent */}
-            <div className="relative">
-              <div className="h-1.5 bg-gradient-to-r from-gray-900 via-gray-600 to-gray-900"></div>
-              <div className="px-6 py-5 flex items-center justify-between border-b border-gray-100">
-                <div className="flex items-center gap-3">
-                  <div className="p-2 bg-gray-100 rounded-xl">
-                    <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                    </svg>
-                  </div>
-                  <div>
-                    <h2 className="text-xl font-semibold text-gray-900">Student Profile</h2>
-                    <p className="text-xs text-gray-500 mt-0.5">Detailed information about the student</p>
-                  </div>
-                </div>
-                <button
-                  onClick={closeProfileModal}
-                  className="text-gray-400 hover:text-gray-600 transition-all duration-200 hover:rotate-90 transform"
+        {/* =========================================================================
+            TAB 1: CANDIDATE EVALUATION DASHBOARD (PHASE 3, 4, 5)
+            ========================================================================= */}
+        {activeTab === "evaluation" && (
+          <div className="space-y-6">
+            {/* Filter and Control Bar */}
+            <div className="p-4 bg-white rounded-2xl border border-gray-200/80 shadow-sm flex flex-col md:flex-row gap-3 items-center justify-between">
+              <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
+                {/* Search */}
+                <input
+                  type="text"
+                  placeholder="Filter candidate by name, skill, or role..."
+                  value={candidateSearch}
+                  onChange={(e) => setCandidateSearch(e.target.value)}
+                  className="px-3.5 py-2 rounded-xl bg-gray-50 border border-gray-200 text-xs text-gray-800 placeholder:text-gray-400 focus:outline-none focus:border-blue-500 transition w-full md:w-56"
+                />
+
+                {/* Opportunity Filter */}
+                <select
+                  value={selectedOpportunityFilter}
+                  onChange={(e) => setSelectedOpportunityFilter(e.target.value)}
+                  className="px-3 py-2 rounded-xl bg-gray-50 border border-gray-200 text-xs text-gray-800 focus:outline-none focus:border-blue-500 cursor-pointer"
                 >
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
-                  </svg>
+                  <option value="all">All Opportunities ({referrals.length})</option>
+                  <option value="direct">Direct Requests Only</option>
+                  {opportunities.map((opp) => (
+                    <option key={opp._id} value={opp._id}>
+                      {opp.title} ({opp.currentApplicationsCount || 0})
+                    </option>
+                  ))}
+                </select>
+
+                {/* Status Filter */}
+                <select
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value)}
+                  className="px-3 py-2 rounded-xl bg-gray-50 border border-gray-200 text-xs text-gray-800 focus:outline-none focus:border-blue-500 cursor-pointer"
+                >
+                  <option value="all">Status: All</option>
+                  <option value="Pending">Pending</option>
+                  <option value="Under Review">Under Review</option>
+                  <option value="Shortlisted">Shortlisted</option>
+                  <option value="Accepted">Accepted</option>
+                  <option value="Selected">Selected</option>
+                  <option value="Rejected">Rejected</option>
+                </select>
+              </div>
+
+              {/* Sort Selector */}
+              <div className="flex items-center gap-2 w-full md:w-auto justify-end">
+                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Sort:</span>
+                <button
+                  onClick={() => setSortBy("score")}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+                    sortBy === "score" ? "bg-blue-600 text-white shadow-sm" : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+                  }`}
+                >
+                  AI Match Score
+                </button>
+                <button
+                  onClick={() => setSortBy("exp")}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+                    sortBy === "exp" ? "bg-blue-600 text-white shadow-sm" : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+                  }`}
+                >
+                  Experience
+                </button>
+                <button
+                  onClick={() => setSortBy("date")}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+                    sortBy === "date" ? "bg-blue-600 text-white shadow-sm" : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+                  }`}
+                >
+                  Newest
                 </button>
               </div>
             </div>
 
-            {/* Modal Body */}
-            <div className="px-6 py-6 space-y-6">
-              {/* Profile Header with Avatar */}
-              <div className="flex items-center gap-5 p-4 bg-gradient-to-r from-gray-50 to-white rounded-xl border border-gray-100">
-                <div className="relative">
-                  <div className="w-20 h-20 rounded-full bg-gradient-to-br from-gray-900 to-gray-700 flex items-center justify-center text-2xl font-bold text-white shadow-lg">
-                    {selectedStudent.name?.[0]?.toUpperCase() || '?'}
-                  </div>
-                  <div className="absolute -bottom-1 -right-1 w-6 h-6 bg-green-500 rounded-full border-2 border-white"></div>
-                </div>
-                <div className="flex-1">
-                  <h3 className="text-2xl font-bold text-gray-900">{selectedStudent.name}</h3>
-                  <p className="text-gray-500 text-sm mt-1">{selectedStudent.email}</p>
-                  <div className="flex items-center gap-2 mt-2">
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 text-xs">
-                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
-                      </svg>
-                      Student
-                    </span>
-                    <span className="text-xs text-gray-400">•</span>
-                    <span className="text-xs text-gray-500">Member since {new Date().getFullYear()}</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Skills Section with Icons */}
-              {selectedStudent.skills && selectedStudent.skills.length > 0 && (
-                <div className="group">
-                  <div className="flex items-center gap-2 mb-3">
-                    <div className="p-1.5 bg-amber-50 rounded-lg">
-                      <svg className="w-4 h-4 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-                      </svg>
-                    </div>
-                    <h4 className="text-sm font-semibold text-gray-900">Skills & Expertise</h4>
-                  </div>
-                  <div className="flex flex-wrap gap-2 ml-7">
-                    {selectedStudent.skills.map((skill, index) => (
-                      <span
-                        key={index}
-                        className="px-3 py-1.5 bg-gradient-to-r from-gray-50 to-gray-100 text-gray-700 text-xs rounded-full border border-gray-200 hover:shadow-sm transition-all duration-200"
-                      >
-                        {skill}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Professional Info Card */}
-              {(selectedStudent.company || selectedStudent.designation || selectedStudent.yearsOfExperience) && (
-                <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
-                  <div className="px-4 py-3 bg-gray-50 border-b border-gray-100">
-                    <div className="flex items-center gap-2">
-                      <svg className="w-4 h-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-.62-9-1.745M16 6V4a2 2 0 00-2-2h-4a2 2 0 00-2 2v2m4 6h.01M5 20h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                      </svg>
-                      <h4 className="text-sm font-semibold text-gray-900">Professional Information</h4>
-                    </div>
-                  </div>
-                  <div className="p-4 space-y-3">
-                    {selectedStudent.company && (
-                      <div className="flex items-center justify-between py-2 border-b border-gray-50 last:border-0">
-                        <span className="text-sm text-gray-500">Company</span>
-                        <span className="text-sm font-medium text-gray-900">{selectedStudent.company}</span>
-                      </div>
-                    )}
-                    {selectedStudent.designation && (
-                      <div className="flex items-center justify-between py-2 border-b border-gray-50 last:border-0">
-                        <span className="text-sm text-gray-500">Designation</span>
-                        <span className="text-sm font-medium text-gray-900">{selectedStudent.designation}</span>
-                      </div>
-                    )}
-                    {selectedStudent.yearsOfExperience && (
-                      <div className="flex items-center justify-between py-2 border-b border-gray-50 last:border-0">
-                        <span className="text-sm text-gray-500">Experience</span>
-                        <span className="text-sm font-medium text-gray-900">
-                          <span className="text-lg font-bold">{selectedStudent.yearsOfExperience}</span> years
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* Bio Section */}
-              {selectedStudent.bio && (
-                <div>
-                  <div className="flex items-center gap-2 mb-3">
-                    <div className="p-1.5 bg-purple-50 rounded-lg">
-                      <svg className="w-4 h-4 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
-                      </svg>
-                    </div>
-                    <h4 className="text-sm font-semibold text-gray-900">About</h4>
-                  </div>
-                  <p className="text-gray-700 leading-relaxed ml-7 p-3 bg-gray-50 rounded-lg italic">
-                    "{selectedStudent.bio}"
-                  </p>
-                </div>
-              )}
-
-              {/* Links Section: LinkedIn, GitHub, Resume */}
-              {(selectedStudent.linkedin || selectedStudent.github || selectedStudent.resume) && (
-                <div>
-                  <div className="flex items-center gap-2 mb-3">
-                    <div className="p-1.5 bg-blue-50 rounded-lg">
-                      <svg className="w-4 h-4 text-blue-600" fill="currentColor" viewBox="0 0 24 24">
-                        <path d="M19 0h-14c-2.761 0-5 2.239-5 5v14c0 2.761 2.239 5 5 5h14c2.762 0 5-2.239 5-5v-14c0-2.761-2.238-5-5-5zm-11 19h-3v-11h3v11zm-1.5-12.268c-.966 0-1.75-.79-1.75-1.764s.784-1.764 1.75-1.764 1.75.79 1.75 1.764-.783 1.764-1.75 1.764zm13.5 12.268h-3v-5.604c0-3.368-4-3.113-4 0v5.604h-3v-11h3v1.765c1.396-2.586 7-2.777 7 2.476v6.759z"/>
-                      </svg>
-                    </div>
-                    <h4 className="text-sm font-semibold text-gray-900">Links & Documents</h4>
-                  </div>
-                  <div className="ml-7 flex flex-col gap-3">
-                    {selectedStudent.linkedin && (
-                      <a
-                        href={selectedStudent.linkedin}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-2 text-blue-600 hover:text-blue-800 underline-offset-2 hover:underline transition-colors"
-                      >
-                        <span className="text-sm">LinkedIn Profile</span>
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                        </svg>
-                      </a>
-                    )}
-                    {selectedStudent.github && (
-                      <a
-                        href={selectedStudent.github}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-2 text-gray-700 hover:text-gray-900 underline-offset-2 hover:underline transition-colors"
-                      >
-                        <span className="text-sm">GitHub Profile</span>
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                        </svg>
-                      </a>
-                    )}
-                    {selectedStudent.resume && (
-                      <a
-                        href={getResumeUrl(selectedStudent.resume)}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-2 text-indigo-600 hover:text-indigo-800 underline-offset-2 hover:underline transition-colors"
-                      >
-                        <span className="text-sm">View Uploaded CV</span>
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                        </svg>
-                      </a>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* Profile Strength Score */}
-              <div className="bg-gradient-to-r from-gray-900 to-gray-800 rounded-xl p-4">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2">
-                    <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-                    </svg>
-                    <span className="text-xs font-medium text-gray-400 uppercase tracking-wide">Profile Strength</span>
-                  </div>
-                  <span className="text-sm font-bold text-white">
-                    {(() => {
-                      let score = 0;
-                      if (selectedStudent.name) score += 15;
-                      if (selectedStudent.email) score += 15;
-                      if (selectedStudent.skills?.length > 0) score += 20;
-                      if (selectedStudent.bio) score += 20;
-                      if (selectedStudent.linkedin) score += 10;
-                      if (selectedStudent.github) score += 10;
-                      if (selectedStudent.resume) score += 10;
-                      return selectedStudent.profileScore || score;
-                    })()}%
-                  </span>
-                </div>
-                <div className="w-full bg-gray-700 rounded-full h-2 overflow-hidden">
-                  <div
-                    className="bg-gradient-to-r from-emerald-500 to-teal-500 h-2 rounded-full transition-all duration-500"
-                    style={{ width: `${(() => {
-                      let score = 0;
-                      if (selectedStudent.name) score += 15;
-                      if (selectedStudent.email) score += 15;
-                      if (selectedStudent.skills?.length > 0) score += 20;
-                      if (selectedStudent.bio) score += 20;
-                      if (selectedStudent.linkedin) score += 10;
-                      if (selectedStudent.github) score += 10;
-                      if (selectedStudent.resume) score += 10;
-                      return selectedStudent.profileScore || score;
-                    })()}%` }}
-                  ></div>
-                </div>
-                <p className="text-xs text-gray-400 mt-2">
-                  {(() => {
-                    let score = 0;
-                    if (selectedStudent.name) score += 15;
-                    if (selectedStudent.email) score += 15;
-                    if (selectedStudent.skills?.length > 0) score += 20;
-                    if (selectedStudent.bio) score += 20;
-                    if (selectedStudent.linkedin) score += 10;
-                    if (selectedStudent.github) score += 10;
-                    if (selectedStudent.resume) score += 10;
-                    const finalScore = selectedStudent.profileScore || score;
-                    if (finalScore >= 80) return 'Excellent profile! 🎯';
-                    if (finalScore >= 60) return 'Good profile, keep improving! 📈';
-                    return 'Complete your profile for better opportunities 🚀';
-                  })()}
+            {/* Candidates Table / Cards */}
+            {loading ? (
+              <div className="py-20 text-center">
+                <div className="inline-block animate-spin rounded-full h-8 w-8 border-4 border-gray-200 border-t-blue-600 mb-3"></div>
+                <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">
+                  Loading applicant roster...
                 </p>
               </div>
+            ) : filteredCandidates.length === 0 ? (
+              <div className="text-center py-20 bg-white rounded-3xl border border-dashed border-gray-200 p-8">
+                <div className="text-4xl mb-3">📥</div>
+                <h3 className="text-base font-bold text-gray-900 mb-1">No applications match these criteria</h3>
+                <p className="text-xs text-gray-500 max-w-sm mx-auto mb-4">
+                  Check back as students discover your opportunities, or adjust your status and opportunity filters.
+                </p>
+                <button
+                  onClick={() => {
+                    setSelectedOpportunityFilter("all");
+                    setStatusFilter("all");
+                    setCandidateSearch("");
+                  }}
+                  className="px-4 py-2 bg-blue-50 text-blue-600 text-xs font-bold rounded-xl hover:bg-blue-100 transition cursor-pointer"
+                >
+                  Reset Filters
+                </button>
+              </div>
+            ) : (
+              <div className="bg-white rounded-3xl border border-gray-200/80 shadow-sm overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left">
+                    <thead>
+                      <tr className="border-b border-gray-100 bg-gray-50/60 text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                        <th className="px-5 py-4 w-12 text-center">Compare</th>
+                        <th className="px-5 py-4">Candidate</th>
+                        <th className="px-5 py-4">Role / Opportunity</th>
+                        <th className="px-5 py-4 text-center">AI Match Score</th>
+                        <th className="px-5 py-4">Evidence Breakdown</th>
+                        <th className="px-5 py-4">Status</th>
+                        <th className="px-5 py-4 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100 text-xs">
+                      {filteredCandidates.map((ref) => {
+                        const score = ref.evaluation?.overallScore || ref.matchScore || 0;
+                        const bd = ref.evaluation?.breakdown || {
+                          skillAlignment: 0,
+                          practicalExperience: 0,
+                          workExperience: 0,
+                          education: 0,
+                          certifications: 0,
+                        };
+                        const isCompared = comparisonIds.includes(ref._id);
+
+                        return (
+                          <tr key={ref._id} className="hover:bg-blue-50/30 transition">
+                            {/* Checkbox for side-by-side comparison */}
+                            <td className="px-5 py-4 text-center">
+                              <input
+                                type="checkbox"
+                                checked={isCompared}
+                                onChange={() => toggleComparison(ref._id)}
+                                className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 cursor-pointer"
+                              />
+                            </td>
+
+                            {/* Candidate Info */}
+                            <td className="px-5 py-4">
+                              <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 rounded-xl bg-gray-900 text-white font-bold text-sm flex items-center justify-center shadow-sm">
+                                  {ref.student?.name?.[0]?.toUpperCase() || "S"}
+                                </div>
+                                <div>
+                                  <p className="font-bold text-gray-900 leading-tight">
+                                    {ref.student?.name || "Student Applicant"}
+                                  </p>
+                                  <p className="text-[11px] text-gray-500">{ref.student?.email}</p>
+                                  <div className="flex items-center gap-2 mt-1">
+                                    <span className="text-[10px] text-gray-600 bg-gray-100 px-1.5 py-0.5 rounded">
+                                      {ref.student?.yearsOfExperience || 0} yrs exp
+                                    </span>
+                                    {ref.student?.github && (
+                                      <a
+                                        href={ref.student.github}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="text-[10px] text-blue-600 hover:underline font-semibold"
+                                      >
+                                        GitHub ↗
+                                      </a>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            </td>
+
+                            {/* Role / Opportunity */}
+                            <td className="px-5 py-4">
+                              <p className="font-bold text-gray-800">{ref.jobRole || "Software Engineer"}</p>
+                              <p className="text-[11px] text-gray-500">{ref.company}</p>
+                              {ref.opportunity ? (
+                                <span className="inline-block mt-1 text-[9px] font-black uppercase tracking-wider text-blue-700 bg-blue-50 px-2 py-0.5 rounded">
+                                  Role Posting
+                                </span>
+                              ) : (
+                                <span className="inline-block mt-1 text-[9px] font-black uppercase tracking-wider text-gray-600 bg-gray-100 px-2 py-0.5 rounded">
+                                  Direct Request
+                                </span>
+                              )}
+                            </td>
+
+                            {/* AI Match Score (Phase 3 & 4) */}
+                            <td className="px-5 py-4 text-center">
+                              <div className="inline-flex flex-col items-center">
+                                <div
+                                  className={`px-3 py-1.5 rounded-xl font-black text-sm border ${
+                                    score >= 80
+                                      ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                      : score >= 60
+                                      ? "bg-blue-50 text-blue-700 border-blue-200"
+                                      : "bg-amber-50 text-amber-700 border-amber-200"
+                                  }`}
+                                >
+                                  {score}%
+                                </div>
+                                <span className="text-[9px] font-bold text-gray-400 uppercase tracking-widest mt-0.5">
+                                  {ref.evaluation?.isAiEvaluated ? "Gemini Verified" : "Evaluated"}
+                                </span>
+                              </div>
+                            </td>
+
+                            {/* Evidence Breakdown Bars */}
+                            <td className="px-5 py-4 min-w-[200px]">
+                              <div className="space-y-1 text-[10px]">
+                                <div className="flex justify-between font-semibold text-gray-600">
+                                  <span>Tech Skills: {bd.skillAlignment}/35</span>
+                                  <span>Projects: {bd.practicalExperience}/25</span>
+                                </div>
+                                <div className="flex justify-between font-semibold text-gray-500">
+                                  <span>Work/Intern: {bd.workExperience}/20</span>
+                                  <span>Edu & Certs: {(bd.education || 0) + (bd.certifications || 0)}/20</span>
+                                </div>
+                                <div className="w-full bg-gray-100 rounded-full h-1.5 overflow-hidden flex">
+                                  <div className="bg-blue-500 h-full" style={{ width: `${(bd.skillAlignment / 35) * 35}%` }} title="Skills" />
+                                  <div className="bg-indigo-500 h-full" style={{ width: `${(bd.practicalExperience / 25) * 25}%` }} title="Projects" />
+                                  <div className="bg-emerald-500 h-full" style={{ width: `${(bd.workExperience / 20) * 20}%` }} title="Work" />
+                                </div>
+                              </div>
+                            </td>
+
+                            {/* Status */}
+                            <td className="px-5 py-4">
+                              <span
+                                className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border whitespace-nowrap ${
+                                  statusBadgeStyles[ref.status] || "bg-gray-50 text-gray-600 border-gray-200"
+                                }`}
+                              >
+                                {ref.status || "Pending"}
+                              </span>
+                            </td>
+
+                            {/* Actions */}
+                            <td className="px-5 py-4 text-right">
+                              <div className="flex items-center justify-end gap-1.5">
+                                <button
+                                  onClick={() => {
+                                    setSelectedApplication(ref);
+                                    setShowEvaluationModal(true);
+                                  }}
+                                  className="px-3 py-1.5 rounded-xl bg-blue-50 text-blue-700 font-bold hover:bg-blue-100 transition cursor-pointer"
+                                >
+                                  Inspect AI Report
+                                </button>
+
+                                {/* Quick Status Select */}
+                                <select
+                                  value={ref.status}
+                                  disabled={updatingStatusId === ref._id}
+                                  onChange={(e) => handleUpdateStatus(ref._id, e.target.value)}
+                                  className="px-2 py-1.5 rounded-xl bg-gray-100 text-gray-800 text-[11px] font-bold border border-gray-200 focus:outline-none cursor-pointer"
+                                >
+                                  <option value="Pending">Pending</option>
+                                  <option value="Under Review">Under Review</option>
+                                  <option value="Shortlisted">Shortlist</option>
+                                  <option value="Accepted">Accept / Refer</option>
+                                  <option value="Interview">Interview</option>
+                                  <option value="Selected">Selected</option>
+                                  <option value="Rejected">Reject</option>
+                                </select>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* =========================================================================
+            TAB 2: OPPORTUNITY MANAGEMENT (PHASE 2)
+            ========================================================================= */}
+        {activeTab === "opportunities" && (
+          <div className="space-y-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-xl font-black text-gray-900 tracking-tight">
+                  Your Posted Referral Opportunities
+                </h2>
+                <p className="text-xs text-gray-500">
+                  Control capacity, pause requests when overwhelmed, and define custom evaluation requirements.
+                </p>
+              </div>
+              <button
+                onClick={() => setShowCreateOppModal(true)}
+                className="px-4 py-2.5 rounded-xl bg-blue-600 text-white text-xs font-bold uppercase tracking-wider hover:bg-blue-700 transition shadow-sm cursor-pointer"
+              >
+                + New Opportunity
+              </button>
             </div>
 
-            {/* Modal Footer */}
-            <div className="px-6 py-4 border-t border-gray-100 bg-gray-50 rounded-b-2xl flex justify-end gap-3">
+            {opportunities.length === 0 ? (
+              <div className="text-center py-20 bg-white rounded-3xl border border-dashed border-gray-200 p-8">
+                <div className="text-4xl mb-3">💼</div>
+                <h3 className="text-base font-bold text-gray-900 mb-1">No referral opportunities posted yet</h3>
+                <p className="text-xs text-gray-500 max-w-sm mx-auto mb-6">
+                  Post open roles from your company. Students will be evaluated by Gemini against your exact requirements.
+                </p>
+                <button
+                  onClick={() => setShowCreateOppModal(true)}
+                  className="px-5 py-2.5 bg-blue-600 text-white font-bold text-xs uppercase tracking-wider rounded-xl hover:bg-blue-700 transition cursor-pointer"
+                >
+                  Create Your First Opportunity
+                </button>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {opportunities.map((opp) => {
+                  const max = opp.maxApplications || 10;
+                  const count = opp.currentApplicationsCount || 0;
+                  const remaining = Math.max(0, max - count);
+                  const isPaused = opp.status === "Paused";
+                  const isClosed = opp.status === "Closed";
+
+                  return (
+                    <div
+                      key={opp._id}
+                      className="bg-white rounded-3xl border border-gray-200 shadow-sm p-6 flex flex-col justify-between"
+                    >
+                      <div>
+                        <div className="flex items-start justify-between gap-2 mb-3">
+                          <span className="text-[10px] font-bold text-blue-700 bg-blue-50 px-2.5 py-1 rounded-full uppercase">
+                            🏢 {opp.company}
+                          </span>
+                          <span
+                            className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${
+                              opp.status === "Active"
+                                ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                                : opp.status === "Paused"
+                                ? "bg-amber-50 text-amber-700 border border-amber-200"
+                                : "bg-rose-50 text-rose-700 border border-rose-200"
+                            }`}
+                          >
+                            {opp.status}
+                          </span>
+                        </div>
+
+                        <h3 className="text-lg font-bold text-gray-900 mb-1">{opp.title}</h3>
+                        <p className="text-xs text-gray-500 mb-4">{opp.role}</p>
+
+                        <p className="text-xs text-gray-600 line-clamp-3 mb-4 leading-relaxed">
+                          {opp.description}
+                        </p>
+
+                        {/* Capacity Meter */}
+                        <div className="mb-4 bg-gray-50 rounded-2xl p-3 border border-gray-100">
+                          <div className="flex justify-between items-center text-[10px] font-bold mb-1">
+                            <span className="text-gray-500 uppercase tracking-widest">Applications Cap:</span>
+                            <span className="text-gray-800">
+                              {count} / {max} received ({remaining} slots left)
+                            </span>
+                          </div>
+                          <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
+                            <div
+                              className="bg-blue-600 h-full rounded-full transition-all"
+                              style={{ width: `${Math.min(100, (count / max) * 100)}%` }}
+                            />
+                          </div>
+                        </div>
+
+                        {/* Skills */}
+                        {opp.requiredSkills && opp.requiredSkills.length > 0 && (
+                          <div className="mb-4 flex flex-wrap gap-1">
+                            {opp.requiredSkills.slice(0, 4).map((sk, idx) => (
+                              <span
+                                key={idx}
+                                className="text-[10px] font-semibold px-2 py-0.5 rounded bg-gray-100 text-gray-700"
+                              >
+                                {sk}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Controls Footer */}
+                      <div className="pt-4 border-t border-gray-100 flex items-center justify-between gap-2">
+                        <button
+                          onClick={() => {
+                            setSelectedOpportunityFilter(opp._id);
+                            setActiveTab("evaluation");
+                          }}
+                          className="text-xs font-bold text-blue-600 hover:underline cursor-pointer"
+                        >
+                          Review Applicants ({count}) →
+                        </button>
+
+                        <div className="flex gap-1">
+                          {opp.status === "Active" ? (
+                            <button
+                              onClick={() => handleToggleOpportunityStatus(opp._id, "Paused")}
+                              className="px-2.5 py-1 text-[11px] font-bold rounded-lg bg-amber-50 text-amber-700 hover:bg-amber-100 cursor-pointer"
+                            >
+                              Pause
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => handleToggleOpportunityStatus(opp._id, "Active")}
+                              className="px-2.5 py-1 text-[11px] font-bold rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100 cursor-pointer"
+                            >
+                              Activate
+                            </button>
+                          )}
+                          {!isClosed && (
+                            <button
+                              onClick={() => handleToggleOpportunityStatus(opp._id, "Closed")}
+                              className="px-2.5 py-1 text-[11px] font-bold rounded-lg bg-rose-50 text-rose-700 hover:bg-rose-100 cursor-pointer"
+                            >
+                              Close
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* =========================================================================
+          MODAL 1: AI CANDIDATE EVALUATION REPORT (PHASE 3, 4, 5)
+          ========================================================================= */}
+      {showEvaluationModal && selectedApplication && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-gray-900/60 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white rounded-3xl max-w-2xl w-full p-8 shadow-2xl border border-gray-100 relative max-h-[90vh] overflow-y-auto">
+            <button
+              onClick={() => setShowEvaluationModal(false)}
+              className="absolute top-6 right-6 text-gray-400 hover:text-gray-600 p-2 text-xl font-bold rounded-full cursor-pointer"
+            >
+              ✕
+            </button>
+
+            {/* Header */}
+            <div className="mb-6">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-[10px] font-bold uppercase tracking-widest text-blue-600 bg-blue-50 px-2.5 py-1 rounded-full">
+                  AI-Assisted Candidate Report
+                </span>
+                <span
+                  className={`text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-full border ${
+                    statusBadgeStyles[selectedApplication.status] || "bg-gray-100 text-gray-700"
+                  }`}
+                >
+                  {selectedApplication.status}
+                </span>
+              </div>
+              <h2 className="text-2xl font-black text-gray-900">
+                {selectedApplication.student?.name || "Candidate Evaluation"}
+              </h2>
+              <p className="text-xs text-gray-500">
+                Applied for {selectedApplication.jobRole} at {selectedApplication.company}
+              </p>
+            </div>
+
+            {/* Match Score Display */}
+            <div className="mb-6 p-6 rounded-3xl bg-gradient-to-br from-[#0f172a] to-blue-950 text-white flex flex-col md:flex-row items-center justify-between gap-6 shadow-lg">
+              <div className="text-center md:text-left">
+                <p className="text-[10px] font-bold text-blue-200 uppercase tracking-widest mb-1">
+                  Explainable Requirement-Match Score
+                </p>
+                <div className="flex items-baseline gap-2 justify-center md:justify-start">
+                  <span className="text-5xl font-black text-white">
+                    {selectedApplication.evaluation?.overallScore || selectedApplication.matchScore || 0}%
+                  </span>
+                  <span className="text-xs text-emerald-400 font-semibold">Evidence-Based</span>
+                </div>
+                <p className="text-[11px] text-blue-200/70 mt-1 max-w-xs">
+                  Evaluated against job requirements using weighted evidence scoring.
+                </p>
+              </div>
+
               <button
-                onClick={closeProfileModal}
-                className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 transition-colors"
+                onClick={() => handleTriggerEvaluation(selectedApplication._id)}
+                disabled={evaluatingId === selectedApplication._id}
+                className="px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold border border-white/20 transition cursor-pointer disabled:opacity-50"
               >
-                Close
-              </button>
-              <button
-                onClick={() => {
-                  closeProfileModal();
-                  // You can add additional action here like sending a message
-                }}
-                className="px-5 py-2 text-sm font-medium bg-gray-900 text-white rounded-lg hover:bg-gray-800 transition-all duration-200 shadow-sm"
-              >
-                Send Message
+                {evaluatingId === selectedApplication._id ? "Re-Evaluating..." : "🔄 Re-Evaluate with Gemini"}
               </button>
             </div>
+
+            {/* Weighted Criteria Breakdown (Phase 4) */}
+            <div className="mb-6">
+              <h4 className="text-xs font-bold text-gray-900 uppercase tracking-widest mb-3">
+                Evidence Scoring Contribution (Weighted Model)
+              </h4>
+              <div className="space-y-3 bg-gray-50 rounded-2xl p-4 border border-gray-100">
+                {[
+                  {
+                    name: "Technical Skill Alignment",
+                    score: selectedApplication.evaluation?.breakdown?.skillAlignment || 0,
+                    max: 35,
+                    color: "bg-blue-600",
+                    desc: "Skills backed by practical projects & internships vs merely listed",
+                  },
+                  {
+                    name: "Relevant Projects & Practical Experience",
+                    score: selectedApplication.evaluation?.breakdown?.practicalExperience || 0,
+                    max: 25,
+                    color: "bg-indigo-600",
+                    desc: "Relevance of technical stack and stated contributions",
+                  },
+                  {
+                    name: "Internship & Work Experience",
+                    score: selectedApplication.evaluation?.breakdown?.workExperience || 0,
+                    max: 20,
+                    color: "bg-emerald-600",
+                    desc: "Hands-on professional or academic project tenure",
+                  },
+                  {
+                    name: "Educational Eligibility",
+                    score: selectedApplication.evaluation?.breakdown?.education || 0,
+                    max: 10,
+                    color: "bg-cyan-600",
+                    desc: "Academic degree alignment & graduation requirements",
+                  },
+                  {
+                    name: "Relevant Certifications & Profile Evidence",
+                    score: selectedApplication.evaluation?.breakdown?.certifications || 0,
+                    max: 10,
+                    color: "bg-amber-600",
+                    desc: "Public GitHub repos, verified credentials & portfolio",
+                  },
+                ].map((item) => (
+                  <div key={item.name} className="space-y-1">
+                    <div className="flex justify-between text-xs font-bold">
+                      <span className="text-gray-800">{item.name}</span>
+                      <span className="text-gray-900">
+                        {item.score} / {item.max} pts
+                      </span>
+                    </div>
+                    <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
+                      <div
+                        className={`h-full rounded-full ${item.color}`}
+                        style={{ width: `${Math.min(100, (item.score / item.max) * 100)}%` }}
+                      />
+                    </div>
+                    <p className="text-[10px] text-gray-500">{item.desc}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Strengths & Observations */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+              <div className="p-4 rounded-2xl bg-emerald-50/70 border border-emerald-100">
+                <h5 className="text-[11px] font-bold text-emerald-800 uppercase tracking-widest mb-2 flex items-center gap-1.5">
+                  <span>✓</span> Evidence-Based Strengths
+                </h5>
+                <ul className="text-xs text-emerald-900 space-y-1.5 list-disc pl-4">
+                  {(selectedApplication.evaluation?.strengths || ["Demonstrated core technical competencies"]).map(
+                    (s, i) => (
+                      <li key={i}>{s}</li>
+                    )
+                  )}
+                </ul>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-amber-50/70 border border-amber-100">
+                <h5 className="text-[11px] font-bold text-amber-800 uppercase tracking-widest mb-2 flex items-center gap-1.5">
+                  <span>ℹ️</span> Verification & Discussion Points
+                </h5>
+                <ul className="text-xs text-amber-900 space-y-1.5 list-disc pl-4">
+                  {(selectedApplication.evaluation?.gaps || ["Verify depth during technical screening"]).map(
+                    (g, i) => (
+                      <li key={i}>{g}</li>
+                    )
+                  )}
+                </ul>
+              </div>
+            </div>
+
+            {/* AI Summary */}
+            {selectedApplication.evaluation?.summary && (
+              <div className="mb-6 p-4 rounded-2xl bg-blue-50/60 border border-blue-100">
+                <h5 className="text-[11px] font-bold text-blue-900 uppercase tracking-widest mb-1">
+                  Evaluation Narrative Summary
+                </h5>
+                <p className="text-xs text-blue-950 leading-relaxed italic">
+                  "{selectedApplication.evaluation.summary}"
+                </p>
+              </div>
+            )}
+
+            {/* Student Pitch Message */}
+            {selectedApplication.message && (
+              <div className="mb-6 p-4 rounded-2xl bg-gray-50 border border-gray-100">
+                <h5 className="text-[11px] font-bold text-gray-500 uppercase tracking-widest mb-1">
+                  Candidate Application Statement
+                </h5>
+                <p className="text-xs text-gray-700 leading-relaxed">
+                  "{selectedApplication.message}"
+                </p>
+              </div>
+            )}
+
+            {/* Supporting Links & Resume */}
+            <div className="mb-6 flex flex-wrap gap-2 text-xs">
+              {selectedApplication.resume && (
+                <a
+                  href={`http://localhost:5000${selectedApplication.resume}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="px-3.5 py-2 rounded-xl bg-gray-900 text-white font-semibold flex items-center gap-1.5 hover:bg-gray-800 transition"
+                >
+                  <span>📄</span> Download Resume
+                </a>
+              )}
+              {selectedApplication.githubUrl && (
+                <a
+                  href={selectedApplication.githubUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="px-3.5 py-2 rounded-xl bg-gray-100 text-gray-800 font-semibold hover:bg-gray-200 transition"
+                >
+                  GitHub Profile ↗
+                </a>
+              )}
+              {selectedApplication.linkedinUrl && (
+                <a
+                  href={selectedApplication.linkedinUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="px-3.5 py-2 rounded-xl bg-blue-50 text-blue-700 font-semibold hover:bg-blue-100 transition"
+                >
+                  LinkedIn Profile ↗
+                </a>
+              )}
+              {selectedApplication.portfolioUrl && (
+                <a
+                  href={selectedApplication.portfolioUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="px-3.5 py-2 rounded-xl bg-emerald-50 text-emerald-700 font-semibold hover:bg-emerald-100 transition"
+                >
+                  Portfolio Website ↗
+                </a>
+              )}
+            </div>
+
+            {/* Ethical AI Guardrail Disclaimer */}
+            <div className="p-3 bg-gray-50 rounded-2xl border border-gray-200 text-[10px] text-gray-500 mb-6 leading-relaxed">
+              <strong>Notice:</strong> This AI match score assists the referrer by evaluating alignment with stated opportunity requirements. It does not measure intrinsic technical ability or guarantee hiring probability. As the referrer, you retain 100% final authority over candidate decisions.
+            </div>
+
+            {/* Referrer Decision Action Controls (Phase 5 & 6) */}
+            <div className="pt-4 border-t border-gray-100 flex flex-wrap items-center gap-2 justify-end">
+              <button
+                onClick={() => handleUpdateStatus(selectedApplication._id, "Under Review")}
+                className="px-3.5 py-2 rounded-xl bg-blue-50 text-blue-700 text-xs font-bold hover:bg-blue-100 transition cursor-pointer"
+              >
+                Mark Under Review
+              </button>
+              <button
+                onClick={() => handleUpdateStatus(selectedApplication._id, "Shortlisted")}
+                className="px-3.5 py-2 rounded-xl bg-indigo-50 text-indigo-700 text-xs font-bold hover:bg-indigo-100 transition cursor-pointer"
+              >
+                ⭐ Shortlist Candidate
+              </button>
+              <button
+                onClick={() => handleUpdateStatus(selectedApplication._id, "Accepted")}
+                className="px-4 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold hover:bg-emerald-700 transition shadow-sm cursor-pointer"
+              >
+                ✓ Accept & Provide Referral
+              </button>
+              <button
+                onClick={() => handleUpdateStatus(selectedApplication._id, "Rejected")}
+                className="px-3.5 py-2 rounded-xl bg-rose-50 text-rose-700 text-xs font-bold hover:bg-rose-100 transition cursor-pointer"
+              >
+                Decline Request
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          MODAL 2: SIDE-BY-SIDE CANDIDATE COMPARISON (PHASE 5)
+          ========================================================================= */}
+      {showComparisonModal && candidatesForComparison.length > 0 && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-gray-900/60 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white rounded-3xl max-w-5xl w-full p-8 shadow-2xl border border-gray-100 relative max-h-[90vh] overflow-y-auto">
+            <button
+              onClick={() => setShowComparisonModal(false)}
+              className="absolute top-6 right-6 text-gray-400 hover:text-gray-600 p-2 text-xl font-bold rounded-full cursor-pointer"
+            >
+              ✕
+            </button>
+
+            <div className="mb-6">
+              <span className="text-[10px] font-bold uppercase tracking-widest text-indigo-600 bg-indigo-50 px-2.5 py-1 rounded-full">
+                Side-by-Side Comparison Matrix
+              </span>
+              <h2 className="text-2xl font-black text-gray-900 mt-2">
+                Comparing {candidatesForComparison.length} Candidates
+              </h2>
+              <p className="text-xs text-gray-500">
+                Compare technical skills, evidence match scores, and stated practical contributions.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {candidatesForComparison.map((cand) => {
+                const score = cand.evaluation?.overallScore || cand.matchScore || 0;
+                const bd = cand.evaluation?.breakdown || {};
+
+                return (
+                  <div
+                    key={cand._id}
+                    className="p-5 rounded-2xl bg-gray-50 border border-gray-200 flex flex-col justify-between"
+                  >
+                    <div>
+                      <div className="flex items-center gap-2 mb-3">
+                        <div className="w-10 h-10 rounded-xl bg-gray-900 text-white font-bold text-sm flex items-center justify-center">
+                          {cand.student?.name?.[0]?.toUpperCase() || "S"}
+                        </div>
+                        <div>
+                          <p className="font-bold text-gray-900 text-sm leading-tight">
+                            {cand.student?.name}
+                          </p>
+                          <p className="text-[11px] text-gray-500">{cand.jobRole}</p>
+                        </div>
+                      </div>
+
+                      {/* Score Card */}
+                      <div className="mb-4 p-3 bg-white rounded-xl border border-gray-200 text-center">
+                        <p className="text-3xl font-black text-blue-600">{score}%</p>
+                        <p className="text-[9px] font-bold uppercase tracking-widest text-gray-400">Match Score</p>
+                      </div>
+
+                      {/* Breakdown Bars */}
+                      <div className="space-y-2 mb-4 text-[11px]">
+                        <div>
+                          <div className="flex justify-between font-semibold">
+                            <span>Skills Alignment:</span>
+                            <span>{bd.skillAlignment || 0}/35</span>
+                          </div>
+                          <div className="w-full bg-gray-200 h-1.5 rounded-full overflow-hidden">
+                            <div
+                              className="bg-blue-600 h-full"
+                              style={{ width: `${((bd.skillAlignment || 0) / 35) * 100}%` }}
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <div className="flex justify-between font-semibold">
+                            <span>Projects & Practical:</span>
+                            <span>{bd.practicalExperience || 0}/25</span>
+                          </div>
+                          <div className="w-full bg-gray-200 h-1.5 rounded-full overflow-hidden">
+                            <div
+                              className="bg-indigo-600 h-full"
+                              style={{ width: `${((bd.practicalExperience || 0) / 25) * 100}%` }}
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <div className="flex justify-between font-semibold">
+                            <span>Work/Internship:</span>
+                            <span>{bd.workExperience || 0}/20</span>
+                          </div>
+                          <div className="w-full bg-gray-200 h-1.5 rounded-full overflow-hidden">
+                            <div
+                              className="bg-emerald-600 h-full"
+                              style={{ width: `${((bd.workExperience || 0) / 20) * 100}%` }}
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Experience and Skills */}
+                      <div className="mb-4 text-xs">
+                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Experience</p>
+                        <p className="font-semibold text-gray-800">{cand.student?.yearsOfExperience || 0} years</p>
+                      </div>
+
+                      <div className="mb-4">
+                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Skills</p>
+                        <div className="flex flex-wrap gap-1">
+                          {(cand.student?.skills || []).map((sk, idx) => (
+                            <span key={idx} className="text-[10px] bg-white border border-gray-200 px-1.5 py-0.5 rounded">
+                              {sk}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Decision Button */}
+                    <div className="pt-4 border-t border-gray-200 flex flex-col gap-1.5">
+                      <button
+                        onClick={() => handleUpdateStatus(cand._id, "Shortlisted")}
+                        className="w-full py-2 bg-indigo-50 text-indigo-700 text-xs font-bold rounded-xl hover:bg-indigo-100 transition cursor-pointer"
+                      >
+                        Shortlist Candidate
+                      </button>
+                      <button
+                        onClick={() => handleUpdateStatus(cand._id, "Accepted")}
+                        className="w-full py-2 bg-emerald-600 text-white text-xs font-bold rounded-xl hover:bg-emerald-700 transition cursor-pointer"
+                      >
+                        Accept & Refer
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          MODAL 3: CREATE REFERRAL OPPORTUNITY (PHASE 2)
+          ========================================================================= */}
+      {showCreateOppModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-gray-900/60 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white rounded-3xl max-w-2xl w-full p-8 shadow-2xl border border-gray-100 relative max-h-[90vh] overflow-y-auto">
+            <button
+              onClick={() => setShowCreateOppModal(false)}
+              className="absolute top-6 right-6 text-gray-400 hover:text-gray-600 p-2 text-xl font-bold rounded-full cursor-pointer"
+            >
+              ✕
+            </button>
+
+            <div className="mb-6">
+              <span className="text-[10px] font-bold uppercase tracking-widest text-blue-600 bg-blue-50 px-2.5 py-1 rounded-full">
+                Referrer Opportunity Creator
+              </span>
+              <h2 className="text-2xl font-black text-gray-900 mt-2">
+                Post a Referral Opportunity
+              </h2>
+              <p className="text-xs text-gray-500">
+                Specify job requirements and application capacity. Gemini will evaluate applicants against these criteria.
+              </p>
+            </div>
+
+            {createOppError && (
+              <div className="mb-4 p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl">
+                {createOppError}
+              </div>
+            )}
+
+            <form onSubmit={handleCreateOpportunity} className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">
+                    Company Name
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={oppForm.company}
+                    onChange={(e) => setOppForm({ ...oppForm, company: e.target.value })}
+                    placeholder="e.g. Google, Microsoft, Stripe"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-gray-50 border border-gray-200 text-xs text-gray-900 focus:bg-white focus:outline-none focus:border-blue-500 transition"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">
+                    Job Title & Role
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={oppForm.title}
+                    onChange={(e) => setOppForm({ ...oppForm, title: e.target.value })}
+                    placeholder="e.g. Senior Frontend Engineer"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-gray-50 border border-gray-200 text-xs text-gray-900 focus:bg-white focus:outline-none focus:border-blue-500 transition"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">
+                  Job Description & Scope
+                </label>
+                <textarea
+                  rows={3}
+                  required
+                  value={oppForm.description}
+                  onChange={(e) => setOppForm({ ...oppForm, description: e.target.value })}
+                  placeholder="Summarize the core technical responsibilities, engineering expectations, and day-to-day work..."
+                  className="w-full p-3.5 rounded-2xl bg-gray-50 border border-gray-200 text-xs text-gray-900 focus:bg-white focus:outline-none focus:border-blue-500 transition"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">
+                  Required Technical Skills (Comma-separated)
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={oppForm.requiredSkills}
+                  onChange={(e) => setOppForm({ ...oppForm, requiredSkills: e.target.value })}
+                  placeholder="React, TypeScript, Node.js, GraphQL, PostgreSQL"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-gray-50 border border-gray-200 text-xs text-gray-900 focus:bg-white focus:outline-none focus:border-blue-500 transition"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-[11px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">
+                    Min Experience (Years)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={oppForm.minExperience}
+                    onChange={(e) => setOppForm({ ...oppForm, minExperience: e.target.value })}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-gray-50 border border-gray-200 text-xs text-gray-900 focus:bg-white focus:outline-none focus:border-blue-500 transition"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">
+                    Max Experience (Years)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={oppForm.maxExperience}
+                    onChange={(e) => setOppForm({ ...oppForm, maxExperience: e.target.value })}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-gray-50 border border-gray-200 text-xs text-gray-900 focus:bg-white focus:outline-none focus:border-blue-500 transition"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">
+                    Max Applications Capacity
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="50"
+                    required
+                    value={oppForm.maxApplications}
+                    onChange={(e) => setOppForm({ ...oppForm, maxApplications: e.target.value })}
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-gray-50 border border-gray-200 text-xs text-gray-900 focus:bg-white focus:outline-none focus:border-blue-500 transition"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">
+                  Educational Eligibility
+                </label>
+                <input
+                  type="text"
+                  value={oppForm.educationRequirements}
+                  onChange={(e) => setOppForm({ ...oppForm, educationRequirements: e.target.value })}
+                  placeholder="e.g. B.Tech / B.S. in Computer Science or equivalent practical background"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-gray-50 border border-gray-200 text-xs text-gray-900 focus:bg-white focus:outline-none focus:border-blue-500 transition"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">
+                  Mandatory Requirements (Semicolon-separated, optional)
+                </label>
+                <input
+                  type="text"
+                  value={oppForm.mandatoryRequirements}
+                  onChange={(e) => setOppForm({ ...oppForm, mandatoryRequirements: e.target.value })}
+                  placeholder="e.g. Must have production React experience; Available for full-time role"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-gray-50 border border-gray-200 text-xs text-gray-900 focus:bg-white focus:outline-none focus:border-blue-500 transition"
+                />
+              </div>
+
+              <div className="pt-3">
+                <button
+                  type="submit"
+                  disabled={creatingOpp}
+                  className="w-full py-3.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs uppercase tracking-wider transition shadow-md shadow-blue-600/20 disabled:opacity-50 cursor-pointer"
+                >
+                  {creatingOpp ? "Posting Opportunity..." : "Publish Referral Opportunity"}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
